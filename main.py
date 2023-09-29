@@ -1,6 +1,8 @@
 from typing import Union
 
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 import lambda_function
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],  # You can restrict this to specific HTTP methods
     allow_headers=["*"],  # You can restrict this to specific headers
 )
+
+
+class ChatInput(BaseModel):
+    currentMessage: str
 
 
 @app.get("/")
@@ -38,3 +44,19 @@ def chatbot(request: dict):
     chat_input = request.get("currentMessage", "")
     response = lambda_function.get_an_answer({"body": {"chat_input": chat_input}})
     return response
+
+
+@app.post("/stream_text")
+async def stream_text():
+    return StreamingResponse(lambda_function.generate_text(), media_type="text/plain")
+
+
+@app.post("/chatbotstream")
+# Read in the request body
+async def chatbot(request_body: ChatInput):
+    chat_input = request_body.currentMessage
+    # response = await lambda_function.get_an_answer({"body": {"chat_input": chat_input}})
+    return StreamingResponse(
+        lambda_function.get_an_answer({"body": {"chat_input": chat_input}}),
+        media_type="text/plain",
+    )

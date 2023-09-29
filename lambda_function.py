@@ -2,7 +2,10 @@ import json
 import uuid
 import os
 import traceback
+from uuid import UUID
 import boto3
+import asyncio
+from typing import Any, Dict, Optional, Union
 
 import langchain
 
@@ -11,6 +14,12 @@ from langchain.retrievers import AmazonKendraRetriever
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from langchain.cache import InMemoryCache
+from langchain.callbacks.manager import CallbackManager
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema.output import ChatGenerationChunk, GenerationChunk
+
+from python.langchain.callbacks import streaming_stdout_final_only
 
 langchain.llm_cache = InMemoryCache()
 langchain.debug = True
@@ -119,6 +128,43 @@ def handle_query(event):
 MAX_HISTORY_LENGTH = 10
 
 
+class StreamingCallbackHandler(BaseCallbackHandler):
+    run_inline = True
+
+    def on_text(
+        self, text: str, color: str | None = None, end: str = "", **kwargs: Any
+    ) -> None:
+        print("On text called")
+        print(text)
+
+    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> None:
+        print("final")
+
+    def on_chain_start(
+        self,
+        serialized: Dict[str, Any],
+        inputs: Dict[str, Any],
+        run_id,
+        parent_run_id,
+        tags,
+        metadata,
+        **kwargs: Any,
+    ):
+        print("chain start")
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        chunk: GenerationChunk | ChatGenerationChunk | None = None,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        print(token)
+        return f"{token}"
+
+
 def build_chain(prompt_template, condense_qa_template):
     llm = Bedrock(
         client=BEDROCK_CLIENT,
@@ -130,6 +176,9 @@ def build_chain(prompt_template, condense_qa_template):
             "top_p": TOP_P,
             "stop_sequences": STOP_SEQUENCES,
         },
+        streaming=True,
+        callbacks=[StreamingCallbackHandler()],
+        callback_manager=CallbackManager([StreamingCallbackHandler()]),
     )
 
     retriever = AmazonKendraRetriever(
@@ -148,6 +197,8 @@ def build_chain(prompt_template, condense_qa_template):
         condense_question_prompt=standalone_question_prompt,
         return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": prompt},
+        verbose=True,
+        callbacks=[],
     )
     return qa
 
@@ -156,11 +207,8 @@ def run_chain(chain, prompt: str, history=[]):
     return chain({"question": prompt, "chat_history": history})
 
 
-def run_chatbot_request(request):
+async def run_chatbot_request(request):
     chat_input = request["body"]["chat_input"]
-
-    # May not need this - can just handle it in the UI?
-    # question_with_id = {"question": chat_input, "id": len(st.session_state.questions)}
 
     chat_history = []
     if len(chat_history) == MAX_HISTORY_LENGTH:
@@ -168,18 +216,20 @@ def run_chatbot_request(request):
 
     llm_chain = build_chain(DEFAULT_PROMPT_TEMPLATE, DEFAULT_CONDENSE_QA_TEMPLATE)
 
+    # llm_chain.arun(chat_input, chat_history)
     result = run_chain(llm_chain, chat_input, chat_history)
-    answer = result["answer"]
-    chat_history.append((chat_input, answer))
+    yield result["answer"]
+    # answer = result["answer"]
+    # chat_history.append((chat_input, answer))
 
-    document_list = []
-    if "source_documents" in result:
-        for d in result["source_documents"]:
-            if not (d.metadata["source"] in document_list):
-                document_list.append((d.metadata["source"]))
+    # document_list = []
+    # if "source_documents" in result:
+    #     for d in result["source_documents"]:
+    #         if not (d.metadata["source"] in document_list):
+    #             document_list.append((d.metadata["source"]))
 
-    # Return answer which is result, and then document list as sources
-    return {"answer": answer, "sources": document_list}
+    # # Return answer which is result, and then document list as sources
+    # return {"answer": answer, "sources": document_list}
 
 
 def get_an_answer(request):
@@ -208,3 +258,10 @@ def lambda_handler(event, _):
         response["statusCode"] = 500
         response["body"] = {}
     return response
+
+
+async def generate_text():
+    for i in range(1, 15):
+        yield f"Line {i}\n"
+        print(f"Line {i}\n")
+        await asyncio.sleep(1)  # Simulate some async operation
