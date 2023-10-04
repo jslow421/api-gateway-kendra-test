@@ -1,12 +1,11 @@
 import json
 import uuid
 import os
-import traceback
-from uuid import UUID
-import boto3
-import asyncio
-from typing import Any, Dict, Optional, Union
+import sys
+import sys
 
+sys.path.insert(0, "/opt/")
+import boto3
 import langchain
 
 from langchain.llms.bedrock import Bedrock
@@ -14,12 +13,6 @@ from langchain.retrievers import AmazonKendraRetriever
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from langchain.cache import InMemoryCache
-from langchain.callbacks.manager import CallbackManager
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema.output import ChatGenerationChunk, GenerationChunk
-
-from python.langchain.callbacks import streaming_stdout_final_only
 
 langchain.llm_cache = InMemoryCache()
 langchain.debug = True
@@ -28,7 +21,7 @@ langchain.verbose = True
 POLLY = boto3.client("polly")
 TRANSLATE = boto3.client("translate")
 KENDRA_CLIENT = boto3.client("kendra")
-BEDROCK_CLIENT = boto3.client("bedrock")
+BEDROCK_CLIENT = boto3.client("bedrock-runtime")
 KENDRA_INDEX_ID = os.getenv("KENDRA_INDEX_ID", "93288901-38ed-4da9-81df-92564b243cff")
 
 MAX_TOKENS_TO_SAMPLE: int = 2048
@@ -69,45 +62,63 @@ Chat History:
 Follow Up Input: {question}
 Standalone question:"""
 
+"""
+Request JSON format for proxy integration
+{
+	"resource": "Resource path",
+	"path": "Path parameter",
+	"httpMethod": "Incoming request's method name"
+	"headers": {Incoming request headers}
+	"queryStringParameters": {query string parameters }
+	"pathParameters":  {path parameters}
+	"stageVariables": {Applicable stage variables}
+	"requestContext": {Request context, including authorizer-returned key-value pairs}
+	"body": "A JSON string of the request payload."
+	"isBase64Encoded": "A boolean flag to indicate if the applicable request payload is Base64-encode"
+}
+
+
+Response JSON format
+{
+	"isBase64Encoded": true|false,
+	"statusCode": httpStatusCode,
+	"headers": { "headerName": "headerValue", ... },
+	"body": "..."
+}
+
+"""
+
+
+# def response_proxy(data):
+#     """
+#     For HTTP status codes, you can take a look at https://httpstatuses.com/
+#     """
+#     response = {}
+#     response["isBase64Encoded"] = False
+#     response["statusCode"] = data["statusCode"]
+#     response["headers"] = {}
+#     if "headers" in data:
+#         response["headers"] = data["headers"]
+#     response["body"] = json.dumps(data["body"])
+#     return response
+
+
+# def request_proxy(data):
+#     request = {}
+#     request = data
+#     if data["body"]:
+#         request["body"] = json.loads(data["body"])
+#     return request
+
+
+# def handle_query(event):
+#     """
+#     This is the main function for handling the query
+#     """
+#     return "Placeholder"
+
 
 MAX_HISTORY_LENGTH = 10
-
-
-class StreamingCallbackHandler(BaseCallbackHandler):
-    run_inline = True
-
-    def on_text(
-        self, text: str, color: str | None = None, end: str = "", **kwargs: Any
-    ) -> None:
-        print("On text called")
-        print(text)
-
-    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> None:
-        print("final")
-
-    def on_chain_start(
-        self,
-        serialized: Dict[str, Any],
-        inputs: Dict[str, Any],
-        run_id,
-        parent_run_id,
-        tags,
-        metadata,
-        **kwargs: Any,
-    ):
-        print("chain start")
-
-    def on_llm_new_token(
-        self,
-        token: str,
-        *,
-        chunk: GenerationChunk | ChatGenerationChunk | None = None,
-        run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        print(token)
-        return f"{token}"
 
 
 def build_chain(prompt_template, condense_qa_template):
@@ -121,9 +132,6 @@ def build_chain(prompt_template, condense_qa_template):
             "top_p": TOP_P,
             "stop_sequences": STOP_SEQUENCES,
         },
-        streaming=True,
-        callbacks=[StreamingCallbackHandler()],
-        callback_manager=CallbackManager([StreamingCallbackHandler()]),
     )
 
     retriever = AmazonKendraRetriever(
@@ -140,9 +148,8 @@ def build_chain(prompt_template, condense_qa_template):
         llm=llm,
         retriever=retriever,
         condense_question_prompt=standalone_question_prompt,
-        return_source_documents=False,
+        return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": prompt},
-        verbose=True,
     )
     return qa
 
@@ -152,26 +159,55 @@ def run_chain(chain, prompt: str, history=[]):
 
 
 def run_chatbot_request(request):
-    chat_input = request["body"]["chat_input"]
+    # chat_input = request["body"]["chat_input"]
+    # chat_input = "who is randall hunt?"
+    print("Request value: ", request)
+    chat_input = request
+    # May not need this - can just handle it in the UI?
+    # question_with_id = {"question": chat_input, "id": len(st.session_state.questions)}
 
     chat_history = []
     if len(chat_history) == MAX_HISTORY_LENGTH:
         chat_history = chat_history[:-1]
 
     llm_chain = build_chain(DEFAULT_PROMPT_TEMPLATE, DEFAULT_CONDENSE_QA_TEMPLATE)
-    return llm_chain.run({"question": chat_input, "chat_history": chat_history})
+
+    result = run_chain(llm_chain, chat_input, chat_history)
+    answer = result["answer"]
+    chat_history.append((chat_input, answer))
+
+    document_list = []
+    if "source_documents" in result:
+        for d in result["source_documents"]:
+            if not (d.metadata["source"] in document_list):
+                document_list.append((d.metadata["source"]))
+
+    # Return answer which is result, and then document list as sources
+    return {"answer": answer, "sources": document_list}
 
 
-async def get_an_answer(request):
+def lambda_handler(event, _):
+    response = {}
+    print("Event body:")
+    print(event.get("body"))
+    request_body = event.get("body")
+    request_data = json.loads(request_body)
     try:
-        value = run_chatbot_request(request)
-        yield value
+        response["statusCode"] = 200
+        response["headers"] = {
+            "Access-Control-Allow-Origin": "*",
+            "content-type": "application/json",
+        }
+        """
+        Add your key/values to be returned here
+        """
+
+        # data = {
+        #     "message": run_chatbot_request(""),
+        # }
+
+        response["body"] = json.dumps(run_chatbot_request(request_data.get("question")))
     except Exception as e:
-        yield {"error": str(e), "trace": traceback.format_exc()}
-
-
-async def generate_text():
-    for i in range(1, 15):
-        yield f"Line {i}\n"
-        print(f"Line {i}\n")
-        await asyncio.sleep(1)  # Simulate some async operation
+        response["statusCode"] = 500
+        response["body"] = str(e)
+    return response

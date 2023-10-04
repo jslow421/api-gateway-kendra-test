@@ -3,7 +3,7 @@ from typing import Union
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import lambda_function
+import langchain_handler
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,7 +28,7 @@ class ChatInput(BaseModel):
 
 @app.get("/")
 def read_root():
-    return lambda_function.get_an_answer(
+    return langchain_handler.get_an_answer(
         {"body": {"chat_input": "Who was the first man on the moon?"}}
     )
 
@@ -42,13 +42,13 @@ def read_item(item_id: int, q: Union[str, None] = None):
 # Read in the request body
 def chatbot(request: dict):
     chat_input = request.get("currentMessage", "")
-    response = lambda_function.get_an_answer({"body": {"chat_input": chat_input}})
+    response = langchain_handler.get_an_answer({"body": {"chat_input": chat_input}})
     return response
 
 
 @app.post("/stream_text")
 async def stream_text():
-    return StreamingResponse(lambda_function.generate_text(), media_type="text/plain")
+    return StreamingResponse(langchain_handler.generate_text(), media_type="text/plain")
 
 
 @app.post("/chatbotstream")
@@ -57,6 +57,6 @@ async def chatbot(request_body: ChatInput):
     chat_input = request_body.currentMessage
     # response = await lambda_function.get_an_answer({"body": {"chat_input": chat_input}})
     return StreamingResponse(
-        lambda_function.get_an_answer({"body": {"chat_input": chat_input}}),
+        langchain_handler.get_an_answer({"body": {"chat_input": chat_input}}),
         media_type="text/plain",
     )
