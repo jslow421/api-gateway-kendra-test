@@ -74,42 +74,6 @@ Assistant:"""
 MAX_HISTORY_LENGTH = 10
 
 
-class StreamingCallbackHandler(BaseCallbackHandler):
-    run_inline = True
-
-    def on_text(
-        self, text: str, color: str | None = None, end: str = "", **kwargs: Any
-    ) -> None:
-        print("On text called")
-        print(text)
-
-    def on_chain_end(self, outputs: Dict[str, Any], **kwargs: Any) -> None:
-        print("final")
-
-    def on_chain_start(
-        self,
-        serialized: Dict[str, Any],
-        inputs: Dict[str, Any],
-        run_id,
-        parent_run_id,
-        tags,
-        metadata,
-        **kwargs: Any,
-    ):
-        print("chain start")
-
-    def on_llm_new_token(
-        self,
-        token: str,
-        *,
-        chunk: GenerationChunk | ChatGenerationChunk | None = None,
-        run_id: UUID,
-        parent_run_id: UUID | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        print(f"{token}")
-
-
 def build_chain(prompt_template, condense_qa_template):
     llm = Bedrock(
         client=BEDROCK_CLIENT,
@@ -122,8 +86,8 @@ def build_chain(prompt_template, condense_qa_template):
             "stop_sequences": STOP_SEQUENCES,
         },
         streaming=False,
-        callbacks=[StreamingCallbackHandler()],
-        callback_manager=CallbackManager([StreamingCallbackHandler()]),
+        # callbacks=[StreamingCallbackHandler()],
+        # callback_manager=CallbackManager([StreamingCallbackHandler()]),
     )
 
     retriever = AmazonKendraRetriever(
@@ -140,7 +104,7 @@ def build_chain(prompt_template, condense_qa_template):
         llm=llm,
         retriever=retriever,
         condense_question_prompt=standalone_question_prompt,
-        return_source_documents=False,
+        return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": prompt},
         verbose=True,
     )
@@ -173,21 +137,23 @@ def run_chatbot_request(request):
         chat_history = chat_history[:-1]
 
     llm_chain = build_chain(DEFAULT_PROMPT_TEMPLATE, DEFAULT_CONDENSE_QA_TEMPLATE)
-    return llm_chain.run({"question": chat_input, "chat_history": chat_history})
+
+    result = run_chain(llm_chain, chat_input, chat_history)
+    answer = result["answer"]
+    chat_history.append((chat_input, answer))
+    document_list = []
+    if "source_documents" in result:
+        for d in result["source_documents"]:
+            if not (d.metadata["source"] in document_list):
+                document_list.append((d.metadata["source"]))
+
+    # Return answer which is result, and then document list as sources
+    return {"answer": answer, "sources": document_list}
 
 
 def get_an_answer(request):
     try:
         value = run_chatbot_request(request)
-        print("value, baby!!!!!!!!!")
-        print("value: ", value)
-        yield value
+        return value
     except Exception as e:
-        yield {"error": str(e), "trace": traceback.format_exc()}
-
-
-async def generate_text():
-    for i in range(1, 15):
-        yield f"Line {i}\n"
-        print(f"Line {i}\n")
-        await asyncio.sleep(1)  # Simulate some async operation
+        return {"error": str(e), "trace": traceback.format_exc()}

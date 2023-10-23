@@ -56,8 +56,7 @@ def chatbot(request_body: ChatInput):
     response = langchain_handler.get_an_answer(
         {"body": {"chat_input": chat_input, "chat_history": chat_history}}
     )
-    print("Completed....")
-    print("response: ", response)
+
     return response
 
 

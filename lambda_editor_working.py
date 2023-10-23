@@ -1,10 +1,12 @@
 import json
-import uuid
 import os
 import sys
 import sys
+import traceback
+from uuid import UUID
 
-sys.path.insert(0, "/opt/")
+from typing import Any, Dict, Optional, List
+
 import boto3
 import langchain
 
@@ -13,6 +15,9 @@ from langchain.retrievers import AmazonKendraRetriever
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
 from langchain.cache import InMemoryCache
+from langchain.schema import SystemMessage, HumanMessage, AIMessage, ChatMessage
+
+from langchain.memory.chat_message_histories.in_memory import ChatMessageHistory
 
 langchain.llm_cache = InMemoryCache()
 langchain.debug = True
@@ -60,65 +65,27 @@ Human: Given the following conversation and a follow up question, rephrase the f
 Chat History:
 {chat_history}
 Follow Up Input: {question}
-Standalone question:"""
-
-"""
-Request JSON format for proxy integration
-{
-	"resource": "Resource path",
-	"path": "Path parameter",
-	"httpMethod": "Incoming request's method name"
-	"headers": {Incoming request headers}
-	"queryStringParameters": {query string parameters }
-	"pathParameters":  {path parameters}
-	"stageVariables": {Applicable stage variables}
-	"requestContext": {Request context, including authorizer-returned key-value pairs}
-	"body": "A JSON string of the request payload."
-	"isBase64Encoded": "A boolean flag to indicate if the applicable request payload is Base64-encode"
-}
-
-
-Response JSON format
-{
-	"isBase64Encoded": true|false,
-	"statusCode": httpStatusCode,
-	"headers": { "headerName": "headerValue", ... },
-	"body": "..."
-}
-
-"""
-
-
-# def response_proxy(data):
-#     """
-#     For HTTP status codes, you can take a look at https://httpstatuses.com/
-#     """
-#     response = {}
-#     response["isBase64Encoded"] = False
-#     response["statusCode"] = data["statusCode"]
-#     response["headers"] = {}
-#     if "headers" in data:
-#         response["headers"] = data["headers"]
-#     response["body"] = json.dumps(data["body"])
-#     return response
-
-
-# def request_proxy(data):
-#     request = {}
-#     request = data
-#     if data["body"]:
-#         request["body"] = json.loads(data["body"])
-#     return request
-
-
-# def handle_query(event):
-#     """
-#     This is the main function for handling the query
-#     """
-#     return "Placeholder"
+Assistant:"""
 
 
 MAX_HISTORY_LENGTH = 10
+
+
+class MessageHistory:
+    def __init__(
+        self,
+        content: Optional[str] = None,
+        role: Optional[str] = None,
+        sources: Optional[List[str]] = None,
+    ):
+        self.content = content
+        self.role = role
+        self.sources = sources
+
+
+class ChatRequest:
+    messages: List[MessageHistory]
+    question: str
 
 
 def build_chain(prompt_template, condense_qa_template):
@@ -150,6 +117,7 @@ def build_chain(prompt_template, condense_qa_template):
         condense_question_prompt=standalone_question_prompt,
         return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": prompt},
+        verbose=True,
     )
     return qa
 
@@ -158,15 +126,30 @@ def run_chain(chain, prompt: str, history=[]):
     return chain({"question": prompt, "chat_history": history})
 
 
-def run_chatbot_request(request):
-    # chat_input = request["body"]["chat_input"]
-    # chat_input = "who is randall hunt?"
-    print("Request value: ", request)
-    chat_input = request
-    # May not need this - can just handle it in the UI?
-    # question_with_id = {"question": chat_input, "id": len(st.session_state.questions)}
+def generate_history(history):
+    messages: list = []
+    # historyList = ChatMessageHistory()
+    # Iterate through each item in history
+    for item in history:
+        # skip if item doesn't have the role property
+        if not hasattr(item, "role"):
+            continue
+        # If the item is a user generated message, add it to the messages list
+        if item.role == "user":
+            # historyList.add_user_message(item.content)
+            messages.append(HumanMessage(content=item.content))
+        # If the item is a system generated message, add it to the messages list
+        elif item.role == "system":
+            messages.append(SystemMessage(content=item.content))
+            # historyList.add_ai_message(item.content)
+    return messages
 
-    chat_history = []
+
+def run_chatbot_request(request):
+    chat_input = request["body"]["chat_input"]
+    messages = generate_history(request["body"]["chat_history"])
+
+    chat_history = messages
     if len(chat_history) == MAX_HISTORY_LENGTH:
         chat_history = chat_history[:-1]
 
@@ -175,7 +158,6 @@ def run_chatbot_request(request):
     result = run_chain(llm_chain, chat_input, chat_history)
     answer = result["answer"]
     chat_history.append((chat_input, answer))
-
     document_list = []
     if "source_documents" in result:
         for d in result["source_documents"]:
@@ -186,27 +168,41 @@ def run_chatbot_request(request):
     return {"answer": answer, "sources": document_list}
 
 
+def get_an_answer(request):
+    try:
+        value = run_chatbot_request(request)
+        return value
+    except Exception as e:
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 def lambda_handler(event, _):
     response = {}
-    print("Event body:")
-    print(event.get("body"))
-    request_body = event.get("body")
-    request_data = json.loads(request_body)
+
+    request_body = json.loads(event["body"])
+    messages = request_body.get("messages", [])
+    question = request_body.get("question", "")
+
+    message_list = [MessageHistory]
+
+    for item in messages:
+        mes = MessageHistory(
+            item.get("content", None), item.get("role", None), item.get("sources", None)
+        )
+        message_list.append(mes)
+
     try:
         response["statusCode"] = 200
         response["headers"] = {
             "Access-Control-Allow-Origin": "*",
             "content-type": "application/json",
         }
-        """
-        Add your key/values to be returned here
-        """
+        resp = get_an_answer(
+            {"body": {"chat_input": question, "chat_history": message_list}}
+        )
+        print("Resp: " + str(resp))
+        response["body"] = json.dumps(resp)
 
-        # data = {
-        #     "message": run_chatbot_request(""),
-        # }
-
-        response["body"] = json.dumps(run_chatbot_request(request_data.get("question")))
     except Exception as e:
         response["statusCode"] = 500
         response["body"] = str(e)
