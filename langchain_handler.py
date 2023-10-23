@@ -5,7 +5,7 @@ import traceback
 from uuid import UUID
 import boto3
 import asyncio
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, List
 
 import langchain
 
@@ -18,6 +18,7 @@ from langchain.callbacks.manager import CallbackManager
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.output import ChatGenerationChunk, GenerationChunk
+from langchain.schema import SystemMessage, HumanMessage, ChatMessage
 
 from python.langchain.callbacks import streaming_stdout_final_only
 
@@ -67,7 +68,7 @@ Human: Given the following conversation and a follow up question, rephrase the f
 Chat History:
 {chat_history}
 Follow Up Input: {question}
-Standalone question:"""
+Assistant:"""
 
 
 MAX_HISTORY_LENGTH = 10
@@ -107,7 +108,6 @@ class StreamingCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> Any:
         print(f"{token}")
-        return f"{token}"
 
 
 def build_chain(prompt_template, condense_qa_template):
@@ -121,7 +121,7 @@ def build_chain(prompt_template, condense_qa_template):
             "top_p": TOP_P,
             "stop_sequences": STOP_SEQUENCES,
         },
-        streaming=True,
+        streaming=False,
         callbacks=[StreamingCallbackHandler()],
         callback_manager=CallbackManager([StreamingCallbackHandler()]),
     )
@@ -151,10 +151,24 @@ def run_chain(chain, prompt: str, history=[]):
     return chain({"question": prompt, "chat_history": history})
 
 
+def generate_history(history):
+    messages: list = []
+    # Iterate through each item in history
+    for item in history:
+        # If the item is a user generated message, add it to the messages list
+        if item.role == "user":
+            messages.append(HumanMessage(content=item.content))
+        # If the item is a system generated message, add it to the messages list
+        elif item.role == "system":
+            messages.append(SystemMessage(content=item.content))
+    return messages
+
+
 def run_chatbot_request(request):
     chat_input = request["body"]["chat_input"]
+    messages = generate_history(request["body"]["chat_history"])
 
-    chat_history = []
+    chat_history = messages
     if len(chat_history) == MAX_HISTORY_LENGTH:
         chat_history = chat_history[:-1]
 
@@ -162,9 +176,11 @@ def run_chatbot_request(request):
     return llm_chain.run({"question": chat_input, "chat_history": chat_history})
 
 
-async def get_an_answer(request):
+def get_an_answer(request):
     try:
         value = run_chatbot_request(request)
+        print("value, baby!!!!!!!!!")
+        print("value: ", value)
         yield value
     except Exception as e:
         yield {"error": str(e), "trace": traceback.format_exc()}

@@ -1,4 +1,5 @@
-from typing import Union
+from calendar import c
+from typing import Union, List, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -6,6 +7,8 @@ from pydantic import BaseModel
 import langchain_handler
 
 from fastapi.middleware.cors import CORSMiddleware
+
+from python.langchain.schema import chat_history
 
 app = FastAPI()
 origins = [
@@ -22,8 +25,15 @@ app.add_middleware(
 )
 
 
+class MessageHistory(BaseModel):
+    content: Optional[str] = None
+    role: Optional[str] = None
+    sources: Optional[List[str]] = None
+
+
 class ChatInput(BaseModel):
-    currentMessage: str
+    question: str
+    messages: List[MessageHistory]
 
 
 @app.get("/")
@@ -40,9 +50,14 @@ def read_item(item_id: int, q: Union[str, None] = None):
 
 @app.post("/chatbot")
 # Read in the request body
-def chatbot(request: dict):
-    chat_input = request.get("currentMessage", "")
-    response = langchain_handler.get_an_answer({"body": {"chat_input": chat_input}})
+def chatbot(request_body: ChatInput):
+    chat_input = request_body.question
+    chat_history = request_body.messages
+    response = langchain_handler.get_an_answer(
+        {"body": {"chat_input": chat_input, "chat_history": chat_history}}
+    )
+    print("Completed....")
+    print("response: ", response)
     return response
 
 
@@ -54,7 +69,7 @@ async def stream_text():
 @app.post("/chatbotstream")
 # Read in the request body
 async def chatbot(request_body: ChatInput):
-    chat_input = request_body.currentMessage
+    chat_input = request_body.question
     # response = await lambda_function.get_an_answer({"body": {"chat_input": chat_input}})
     return StreamingResponse(
         langchain_handler.get_an_answer({"body": {"chat_input": chat_input}}),
