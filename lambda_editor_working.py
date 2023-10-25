@@ -29,7 +29,10 @@ from langchain.memory.chat_message_histories.in_memory import ChatMessageHistory
 
 from langchain.chat_models.bedrock import BedrockChat
 
-from langchain.memory.buffer import ConversationBufferMemory
+from langchain.memory.buffer import (
+    ConversationBufferMemory,
+    ConversationStringBufferMemory,
+)
 
 langchain.llm_cache = InMemoryCache()
 langchain.debug = True
@@ -183,10 +186,11 @@ def build_chain(prompt_template, condense_qa_template):
         return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": prompt},
         verbose=True,
-        memory=ConversationBufferMemory(
-            # Anthropic requires the prefix to be "Assistant":
-            ai_prefix="Assistant"
-        ),
+        # memory=ConversationStringBufferMemory(
+        #     # Anthropic requires the prefix to be "Assistant":
+        #     ai_prefix="Assistant",
+        #     input_key=["chat_history", "question"],
+        # ),
     )
     return qa
 
