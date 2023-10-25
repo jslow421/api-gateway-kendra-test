@@ -121,7 +121,7 @@ def synthesize_speech(text):
 USER_ICON = "user-icon.png"
 AI_ICON = "ai-icon.png"
 MAX_HISTORY_LENGTH = 10
-DEFAULT_PROMPT_TEMPLATE = """\
+DEFAULT_PROMPT_TEMPLATE = """
 Human: This conversation demonstrates the power of retrieval augmented generation.
 You are the AI. You will synthesize a response from your own context and the provided documents.
 Follow these rules for your responses:

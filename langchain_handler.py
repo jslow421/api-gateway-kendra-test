@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Union, List
 import langchain
 
 from langchain.llms.bedrock import Bedrock
+from langchain.chat_models.bedrock import BedrockChat
 from langchain.retrievers import AmazonKendraRetriever
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import PromptTemplate
@@ -19,6 +20,8 @@ from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema.output import ChatGenerationChunk, GenerationChunk
 from langchain.schema import SystemMessage, HumanMessage, ChatMessage
+from langchain.memory import ChatMessageHistory
+from langchain.memory.buffer import ConversationBufferMemory
 
 from python.langchain.callbacks import streaming_stdout_final_only
 
@@ -40,7 +43,7 @@ STOP_SEQUENCES = ["\n\nHuman:"]
 
 MAX_HISTORY_LENGTH = 10
 DEFAULT_PROMPT_TEMPLATE = """\
-Human: This conversation demonstrates the power of retrieval augmented generation.
+This conversation demonstrates the power of retrieval augmented generation.
 You are the AI. You will synthesize a response from your own context and the provided documents.
 Follow these rules for your responses:
 * If the documents are relevant, use them to synthesize your answer.
@@ -63,11 +66,12 @@ Answer the user's question: "{question}"
 Assistant:"""
 
 DEFAULT_CONDENSE_QA_TEMPLATE = """\
-Human: Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question, in its original language.
+Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question, in its original language.
 
 Chat History:
 {chat_history}
 Follow Up Input: {question}
+
 Assistant:"""
 
 
@@ -75,7 +79,7 @@ MAX_HISTORY_LENGTH = 10
 
 
 def build_chain(prompt_template, condense_qa_template):
-    llm = Bedrock(
+    llm = BedrockChat(
         client=BEDROCK_CLIENT,
         model_id="anthropic.claude-v2",
         model_kwargs={
@@ -116,23 +120,29 @@ def run_chain(chain, prompt: str, history=[]):
 
 
 def generate_history(history):
-    messages: list = []
+    message_history = ChatMessageHistory()
     # Iterate through each item in history
     for item in history:
+        # skip if item doesn't have the role property
+        if not hasattr(item, "role"):
+            continue
         # If the item is a user generated message, add it to the messages list
         if item.role == "user":
-            messages.append(HumanMessage(content=item.content))
+            val = item.content
+            message_history.add_user_message(val)
         # If the item is a system generated message, add it to the messages list
         elif item.role == "system":
-            messages.append(SystemMessage(content=item.content))
-    return messages
+            val = item.content
+            message_history.add_ai_message(val)
+
+    return message_history
 
 
 def run_chatbot_request(request):
     chat_input = request["body"]["chat_input"]
-    messages = generate_history(request["body"]["chat_history"])
+    hist = generate_history(request["body"]["chat_history"])
 
-    chat_history = messages
+    chat_history = hist.messages
     if len(chat_history) == MAX_HISTORY_LENGTH:
         chat_history = chat_history[:-1]
 
